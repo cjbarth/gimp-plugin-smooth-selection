@@ -160,79 +160,6 @@ def inside_track_smoothing(coords, factor):
     return smoothed
 
 
-def inner_contour_smoothing(coords, factor):
-    """
-    TODO: Test
-    True inner contour smoothing algorithm that guarantees the smoothed path
-    stays inside the original boundary.
-
-    Args:
-        coords: List of (x, y) coordinate tuples
-        factor: Smoothing factor (0.1 to 1.0)
-
-    Returns:
-        List of smoothed (x, y) coordinate tuples
-    """
-    import numpy as np
-
-    # Convert to numpy array for easier manipulation
-    points = np.array(coords)
-    length = len(points)
-
-    # Calculate centroid of the shape
-    centroid = np.mean(points, axis=0)
-
-    # Step 1: Calculate vectors from centroid to each point
-    vectors = points - centroid
-
-    # Step 2: Calculate vector lengths (distances from centroid)
-    distances = np.sqrt(np.sum(vectors**2, axis=1))
-
-    # Step 3: Calculate unit vectors (normalized direction vectors)
-    unit_vectors = vectors / distances[:, np.newaxis]
-
-    # Step 4: Shrink the shape by scaling down the vectors based on factor
-    # Higher factor means more shrinkage
-    shrink_amount = factor * np.max(distances) * 0.2
-
-    # Create initial inner contour by uniformly shrinking
-    inner_points = points - unit_vectors * shrink_amount
-
-    # Step 5: Apply a gentle smoothing to the inner contour
-    # We'll use a simple moving average
-    window_size = max(1, int(factor * 3))
-    smoothed = []
-
-    for i in range(length):
-        # Calculate indices for the window, with wraparound
-        indices = [(i + j) % length for j in range(-window_size, window_size + 1)]
-
-        # Calculate the average position
-        avg_x = sum(inner_points[j][0] for j in indices) / len(indices)
-        avg_y = sum(inner_points[j][1] for j in indices) / len(indices)
-
-        # Step 6: The critical part - ensure we stay inside the original polygon
-        # by checking if the smoothed point is outside, and if so, move it inside
-
-        # First, we'll approximate this by checking if the new point is further
-        # from the centroid than the original inner point
-        new_vector = np.array([avg_x, avg_y]) - centroid
-        new_distance = np.sqrt(np.sum(new_vector**2))
-
-        inner_distance = np.sqrt(np.sum((inner_points[i] - centroid) ** 2))
-
-        if new_distance > inner_distance:
-            # If the smoothed point would be outside the inner contour,
-            # scale it back to ensure it stays inside
-            scale = inner_distance / new_distance
-            avg_x = centroid[0] + (avg_x - centroid[0]) * scale
-            avg_y = centroid[1] + (avg_y - centroid[1]) * scale
-
-        smoothed.append((avg_x, avg_y))
-
-    return smoothed
-
-
 # Alternative implementation using more geometric approach
 def geometric_inner_contour(coords, factor):
     """
@@ -405,11 +332,6 @@ SMOOTH_METHODS = [
         "Inside Track",
         inside_track_smoothing,
         "Favors smoothing inward. Keeps selection close to original edges.",
-    ),
-    (
-        "Inner Contour",
-        inner_contour_smoothing,
-        "Shrinks and smooths the path inward. Guaranteed to stay inside boundary.",
     ),
     (
         "Geometric Inner Contour",
