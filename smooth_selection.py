@@ -96,6 +96,57 @@ def pixel_radius_smoothing(coords, factor):
     return smoothed
 
 
+def inward_pixel_radius_smoothing(coords, factor):
+    pixel_radius = max(1, int(factor * 20))  # 1-20 pixels
+    smoothed = []
+    length = len(coords)
+
+    # Determine overall winding direction
+    def polygon_area(coords):
+        return 0.5 * sum(
+            coords[i][0] * coords[(i + 1) % length][1]
+            - coords[(i + 1) % length][0] * coords[i][1]
+            for i in range(length)
+        )
+
+    winding_sign = -1 if polygon_area(coords) < 0 else 1  # CW = -1, CCW = +1
+
+    def triangle_area_sign(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    for i in range(length):
+        x, y = coords[i]
+        # Get neighbors within radius
+        neighbors = [
+            pt for pt in coords if math.hypot(pt[0] - x, pt[1] - y) <= pixel_radius
+        ]
+        if not neighbors:
+            smoothed.append((x, y))
+            continue
+
+        # Local average position
+        avg_x = sum(pt[0] for pt in neighbors) / len(neighbors)
+        avg_y = sum(pt[1] for pt in neighbors) / len(neighbors)
+
+        # Determine if current point is an outward bump
+        prev = coords[i - 1]
+        next_pt = coords[(i + 1) % length]
+        signed_area = triangle_area_sign(prev, (x, y), next_pt)
+
+        is_outward = math.copysign(1, signed_area) == winding_sign
+
+        if is_outward:
+            # Move toward average
+            new_x = x + (avg_x - x) * factor
+            new_y = y + (avg_y - y) * factor
+            smoothed.append((new_x, new_y))
+        else:
+            # Leave inward/neutral points alone
+            smoothed.append((x, y))
+
+    return smoothed
+
+
 def inside_track_smoothing(coords, factor):
     """
     Smooths a path by preferentially cutting inward corners.
@@ -327,6 +378,11 @@ SMOOTH_METHODS = [
         "Pixel Radius",
         pixel_radius_smoothing,
         "Averages points within a pixel range. Great for high-detail smoothing.",
+    ),
+    (
+        "Inward Pixel Radius",
+        inward_pixel_radius_smoothing,
+        "Like Pixel Radius but only pulls in bumps, preserving inward details.",
     ),
     (
         "Inside Track",
