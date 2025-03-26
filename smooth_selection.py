@@ -3,6 +3,13 @@
 from gimpfu import *
 import math
 
+IN_CTRL_X = 0
+IN_CTRL_Y = 1
+ANCHOR_X = 2
+ANCHOR_Y = 3
+OUT_CTRL_X = 4
+OUT_CTRL_Y = 5
+
 
 def moving_average(coords, factor):
     window_size = max(1, int(factor * 5))  # Scale factor to a practical window size
@@ -435,51 +442,17 @@ SMOOTH_METHODS = [
 
 
 METHOD_LABELS = [name for name, _, _ in SMOOTH_METHODS] + [
-    "Help – Show method descriptions"
+    "Help - Show method descriptions"
 ]
 
 
 def show_help_dialog():
-    import gtk
-
-    win = gtk.Window()
-    win.set_title("Smoothing Method Help")
-    win.set_default_size(500, 400)
-    win.set_keep_above(True)
-    win.set_type_hint(gtk.gdk.WINDOW_TYPE_HINT_DIALOG)
-
-    vbox = gtk.VBox(spacing=6)
-    win.add(vbox)
-
-    label = gtk.Label()
-    label.set_use_markup(True)
-    label.set_markup("<b>Smoothing Method Descriptions</b>")
-    label.set_alignment(0, 0.5)
-    vbox.pack_start(label, expand=False, fill=True, padding=6)
-
-    scroller = gtk.ScrolledWindow()
-    scroller.set_policy(gtk.POLICY_AUTOMATIC, gtk.POLICY_AUTOMATIC)
-    vbox.pack_start(scroller, expand=True, fill=True)
-
-    textview = gtk.TextView()
-    textview.set_editable(False)
-    textview.set_wrap_mode(gtk.WRAP_WORD)
-    text_buffer = textview.get_buffer()
-
-    # Compose help text
     help_lines = [
-        f"{i+1}. {name}\n   {desc}" for i, (name, _, desc) in enumerate(SMOOTH_METHODS)
+        "{}. {}\n   {}".format(i + 1, name, desc)
+        for i, (name, _, desc) in enumerate(SMOOTH_METHODS)
     ]
     help_text = "\n\n".join(help_lines)
-    text_buffer.set_text(help_text)
-
-    scroller.add(textview)
-
-    button = gtk.Button("Close")
-    button.connect("clicked", lambda btn: win.destroy())
-    vbox.pack_start(button, expand=False, fill=False, padding=6)
-
-    win.show_all()
+    pdb.gimp_message(help_text)
 
 
 def smooth_selection(
@@ -497,16 +470,15 @@ def smooth_selection(
         show_help_dialog()
         return
 
+    if pdb.gimp_selection_is_empty(image):
+        pdb.gimp_message("No selection found. Please select an area first.")
+        return
+
     pdb.gimp_image_undo_group_start(image)
 
     pdb.plug_in_sel2path(image, drawable)
     vectors = pdb.gimp_image_get_active_vectors(image)
     stroke_count, stroke_ids = pdb.gimp_vectors_get_strokes(vectors)
-
-    if stroke_count == 0:
-        pdb.gimp_message("No selection path found!")
-        pdb.gimp_image_undo_group_end(image)
-        return
 
     new_vectors = pdb.gimp_vectors_new(image, "Smoothed Selection")
     pdb.gimp_image_insert_vectors(image, new_vectors, None, 0)
@@ -518,23 +490,52 @@ def smooth_selection(
         stroke_type, num_points, points, closed = pdb.gimp_vectors_stroke_get_points(
             vectors, str(stroke_id)
         )
-        coords = [(points[i], points[i + 1]) for i in range(0, len(points), 6)]
 
-        if len(coords) < 6:
-            continue  # skip very simple paths, likely image boundaries
+        # We'll parse the full 6-float structure for each anchor:
+        bezier_anchors = [list(points[i : i + 6]) for i in range(0, len(points), 6)]
 
-        for _ in range(int(smooth_iterations)):
-            coords = smoothing_function(coords, factor)
+        if len(bezier_anchors) < 6:
+            # skip very simple paths, likely image boundaries
+            continue
 
-        new_points = []
-        for x, y in coords:
-            new_points += [x, y, x, y, x, y]
+        if preserve_curves:
+            # Only pass anchor coords (ax, ay) to the smoothing function
+            anchor_coords = [(a[ANCHOR_X], a[ANCHOR_Y]) for a in bezier_anchors]
 
-        final_stroke_type = stroke_type if preserve_curves else 0
+            for _ in range(int(smooth_iterations)):
+                anchor_coords = smoothing_function(anchor_coords, factor)
+
+            # Update anchor positions with smoothed coords
+            for j, (sx, sy) in enumerate(anchor_coords):
+                bezier_anchors[j][ANCHOR_X] = sx
+                bezier_anchors[j][ANCHOR_Y] = sy
+
+            new_points = [
+                coord for bezier_anchor in bezier_anchors for coord in bezier_anchor
+            ]
+
+            final_stroke_type = stroke_type  # keep original stroke type
+        else:
+            # Fallback to old approach: treat each anchor as (x, y) repeated
+            anchor_coords = [(a[ANCHOR_X], a[ANCHOR_Y]) for a in bezier_anchors]
+
+            for _ in range(int(smooth_iterations)):
+                anchor_coords = smoothing_function(anchor_coords, factor)
+
+            new_points = []
+            for x, y in anchor_coords:
+                # Collapse out & in handles to the anchor itself
+                new_points += [x, y, x, y, x, y]
+
+            # Force stroke type = 0 (POLY line) if not preserving curves
+            final_stroke_type = 0
+
+        # Create the smoothed stroke
         pdb.gimp_vectors_stroke_new_from_points(
             new_vectors, final_stroke_type, len(new_points), new_points, closed
         )
 
+    # Re-select from the new vectors
     pdb.gimp_image_select_item(image, CHANNEL_OP_REPLACE, new_vectors)
 
     if not preserve_path:
