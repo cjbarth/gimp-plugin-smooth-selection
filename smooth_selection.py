@@ -98,7 +98,6 @@ def pixel_radius_smoothing(coords, factor):
 
 def inside_track_smoothing(coords, factor):
     """
-    TODO: Test
     Smooths a path by preferentially cutting inward corners.
     This creates a smoother path that tends to stay inside the original selection,
     effectively trimming jagged edges.
@@ -237,7 +236,6 @@ def inner_contour_smoothing(coords, factor):
 # Alternative implementation using more geometric approach
 def geometric_inner_contour(coords, factor):
     """
-    TODO: Test
     A geometric approach to inner contour smoothing using convex hull
     and path deflation techniques.
 
@@ -248,7 +246,6 @@ def geometric_inner_contour(coords, factor):
     Returns:
         List of smoothed (x, y) coordinate tuples
     """
-    import math
 
     length = len(coords)
     result = []
@@ -325,76 +322,62 @@ def geometric_inner_contour(coords, factor):
 
 def sanding_smoothing(coords, factor):
     """
-    TODO: Test
-    A single-pass smoothing algorithm that mimics sanding by selectively
-    smoothing protruding points while leaving recessed areas mostly untouched.
-
-    Designed to work with the existing iteration framework in the GIMP plugin.
-
-    Args:
-        coords: List of (x, y) coordinate tuples
-        factor: Smoothing factor (0.1 to 1.0) controlling sanding intensity
-
-    Returns:
-        List of smoothed (x, y) coordinate tuples
+    Smooths only outward-pointing bumps by pulling them toward the line between neighbors.
+    `factor` is between 0.1 and 1.0 and controls the fraction of the "bump" to shave off.
     """
-    import math
-
-    result = []
     length = len(coords)
+    if length < 3:
+        return coords  # Not enough points to smooth
 
-    # Window size increases with factor to simulate wider sanding blocks
-    window_size = max(1, int(2 + factor * 4))
-    sensitivity = 0.7 + factor * 0.4  # How sensitive to detect protruding points
+    new_coords = [None] * length
 
+    def polygon_area(coords):
+        return 0.5 * sum(
+            coords[i][0] * coords[(i + 1) % length][1]
+            - coords[(i + 1) % length][0] * coords[i][1]
+            for i in range(length)
+        )
+
+    def triangle_area_sign(a, b, c):
+        """Signed area: positive if a->b->c is CCW, negative if CW"""
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def perpendicular_vector_to_line(p, a, c):
+        """Returns vector from p to its projection on line AC"""
+        acx = c[0] - a[0]
+        acy = c[1] - a[1]
+        ac_len_sq = acx**2 + acy**2
+        if ac_len_sq == 0:
+            return 0.0, 0.0  # Degenerate segment
+
+        apx = p[0] - a[0]
+        apy = p[1] - a[1]
+        t = (apx * acx + apy * acy) / ac_len_sq
+        px = a[0] + t * acx
+        py = a[1] + t * acy
+        return (px - p[0], py - p[1])
+
+    # --- Determine overall winding direction ---
+    total_area = polygon_area(coords)
+    winding_sign = -1 if total_area < 0 else 1  # CW = -1, CCW = +1
+
+    # --- Sand each point ---
     for i in range(length):
-        # Get neighboring points
-        neighbors = []
-        for j in range(-window_size, window_size + 1):
-            if j != 0:  # Skip the current point
-                idx = (i + j) % length
-                neighbors.append(coords[idx])
+        a = coords[i - 1]
+        b = coords[i]
+        c = coords[(i + 1) % length]
 
-        # Current point
-        pt = coords[i]
+        signed_area = triangle_area_sign(a, b, c)
+        if math.copysign(1, signed_area) != winding_sign:
+            # This is an inward dent or flat segment - skip
+            new_coords[i] = b
+            continue
 
-        # Calculate the average position of neighbors
-        avg_x = sum(n[0] for n in neighbors) / len(neighbors)
-        avg_y = sum(n[1] for n in neighbors) / len(neighbors)
+        # This is an outward bump - shave it
+        dx, dy = perpendicular_vector_to_line(b, a, c)
+        new_coords[i] = (b[0] + dx * factor, b[1] + dy * factor)
 
-        # Calculate average distance from neighbor points to their average center
-        avg_dist = sum(
-            math.sqrt((n[0] - avg_x) ** 2 + (n[1] - avg_y) ** 2) for n in neighbors
-        ) / len(neighbors)
-
-        # Distance of current point to the average center
-        pt_dist = math.sqrt((pt[0] - avg_x) ** 2 + (pt[1] - avg_y) ** 2)
-
-        # If point is outside the average circle (adjusted by sensitivity), it protrudes
-        if pt_dist > avg_dist * sensitivity:
-            # Calculate how much to sand down (more for higher protrusion)
-            protrusion = pt_dist - avg_dist
-            sand_amount = min(protrusion, protrusion * factor)
-
-            # Direction from point to average center
-            if pt_dist > 0:  # Avoid division by zero
-                dir_x = (avg_x - pt[0]) / pt_dist
-                dir_y = (avg_y - pt[1]) / pt_dist
-
-                # Move point inward (sand it down)
-                result.append(
-                    (pt[0] + dir_x * sand_amount, pt[1] + dir_y * sand_amount)
-                )
-            else:
-                result.append(pt)  # Keep original if calculation fails
-        else:
-            # For non-protruding points, apply very mild smoothing
-            mild_factor = factor * 0.2  # Much gentler than for protruding points
-            new_x = pt[0] * (1 - mild_factor) + avg_x * mild_factor
-            new_y = pt[1] * (1 - mild_factor) + avg_y * mild_factor
-            result.append((new_x, new_y))
-
-    return result
+    return new_coords
 
 
 SMOOTH_METHODS = [
