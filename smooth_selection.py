@@ -3,408 +3,324 @@
 from gimpfu import *
 import math
 
-IN_CTRL_X = 0
-IN_CTRL_Y = 1
-ANCHOR_X = 2
-ANCHOR_Y = 3
-OUT_CTRL_X = 4
-OUT_CTRL_Y = 5
+# Coordinate indices for Bezier point arrays
+BEZIER_IN_CTRL_X = 0
+BEZIER_IN_CTRL_Y = 1
+BEZIER_ANCHOR_X = 2
+BEZIER_ANCHOR_Y = 3
+BEZIER_OUT_CTRL_X = 4
+BEZIER_OUT_CTRL_Y = 5
 
 
-def moving_average(coords, factor):
-    window_size = max(1, int(factor * 5))  # Scale factor to a practical window size
-    smoothed = []
-    length = len(coords)
-    for i in range(length):
+def compute_moving_average(points, smoothing_factor, selection_channel):
+    window_size = max(1, int(smoothing_factor * 5))
+    smoothed_points = []
+    point_count = len(points)
+
+    for i in range(point_count):
         avg_x = sum(
-            coords[(i + j) % length][0] for j in range(-window_size, window_size + 1)
+            points[(i + j) % point_count][0]
+            for j in range(-window_size, window_size + 1)
         ) / (2 * window_size + 1)
         avg_y = sum(
-            coords[(i + j) % length][1] for j in range(-window_size, window_size + 1)
+            points[(i + j) % point_count][1]
+            for j in range(-window_size, window_size + 1)
         ) / (2 * window_size + 1)
-        smoothed.append((avg_x, avg_y))
+        smoothed_points.append((avg_x, avg_y))
 
-    return smoothed
+    return smoothed_points
 
 
-def chaikin_smoothing(coords, factor):
-    shrink_factor = factor * 0.25  # Scale factor between 0 and 0.25
-    new_coords = []
-    length = len(coords)
-    for i in range(length):
-        p0 = coords[i]
-        p1 = coords[(i + 1) % length]
-        Q = (
+def compute_chaikin_smoothing(points, smoothing_factor, selection_channel):
+    shrink_factor = smoothing_factor * 0.25
+    smoothed_points = []
+    point_count = len(points)
+
+    for i in range(point_count):
+        p0 = points[i]
+        p1 = points[(i + 1) % point_count]
+
+        q_point = (
             (1 - shrink_factor) * p0[0] + shrink_factor * p1[0],
             (1 - shrink_factor) * p0[1] + shrink_factor * p1[1],
         )
-        R = (
+        r_point = (
             shrink_factor * p0[0] + (1 - shrink_factor) * p1[0],
             shrink_factor * p0[1] + (1 - shrink_factor) * p1[1],
         )
-        new_coords.extend([Q, R])
+        smoothed_points.extend([q_point, r_point])
 
-    return new_coords
+    return smoothed_points
 
 
-def gaussian_smoothing(coords, factor):
-    sigma = factor * 3  # Scale factor to a useful sigma value
+def compute_gaussian_smoothing(points, smoothing_factor, selection_channel):
+    sigma = smoothing_factor * 3
     radius = max(1, int(sigma * 3))
-    smoothed = []
-    length = len(coords)
+    smoothed_points = []
+    point_count = len(points)
+
     weights = [math.exp(-(i**2) / (2 * sigma**2)) for i in range(-radius, radius + 1)]
     weight_sum = sum(weights)
 
-    for i in range(length):
+    for i in range(point_count):
         avg_x = (
             sum(
-                coords[(i + j) % length][0] * weights[j + radius]
+                points[(i + j) % point_count][0] * weights[j + radius]
                 for j in range(-radius, radius + 1)
             )
             / weight_sum
         )
         avg_y = (
             sum(
-                coords[(i + j) % length][1] * weights[j + radius]
+                points[(i + j) % point_count][1] * weights[j + radius]
                 for j in range(-radius, radius + 1)
             )
             / weight_sum
         )
-        smoothed.append((avg_x, avg_y))
+        smoothed_points.append((avg_x, avg_y))
 
-    return smoothed
+    return smoothed_points
 
 
-def pixel_radius_smoothing(coords, factor):
-    pixel_radius = max(
-        1, int(factor * 20)
-    )  # Scale factor to pixel radius (1-20 pixels)
-    smoothed = []
-    length = len(coords)
+def compute_pixel_radius_smoothing(points, smoothing_factor, selection_channel):
+    pixel_radius = max(1, int(smoothing_factor * 20))
+    smoothed_points = []
+    point_count = len(points)
 
-    for i in range(length):
-        x, y = coords[i]
+    for i in range(point_count):
+        x, y = points[i]
         neighbors = [
-            coords[j]
-            for j in range(length)
-            if math.hypot(coords[j][0] - x, coords[j][1] - y) <= pixel_radius
+            pt for pt in points if math.hypot(pt[0] - x, pt[1] - y) <= pixel_radius
         ]
         avg_x = sum(pt[0] for pt in neighbors) / len(neighbors)
         avg_y = sum(pt[1] for pt in neighbors) / len(neighbors)
-        smoothed.append((avg_x, avg_y))
+        smoothed_points.append((avg_x, avg_y))
 
-    return smoothed
+    return smoothed_points
 
 
-def inward_pixel_radius_smoothing(coords, factor):
-    pixel_radius = max(1, int(factor * 20))  # 1-20 pixels
-    smoothed = []
-    length = len(coords)
+def compute_inward_pixel_radius_smoothing(points, smoothing_factor, selection_channel):
+    pixel_radius = max(1, int(smoothing_factor * 20))
+    smoothed_points = []
+    point_count = len(points)
 
-    # Determine overall winding direction
-    def polygon_area(coords):
-        return 0.5 * sum(
-            coords[i][0] * coords[(i + 1) % length][1]
-            - coords[(i + 1) % length][0] * coords[i][1]
-            for i in range(length)
-        )
+    def get_point(index):
+        return tuple(points[index % len(points)])
 
-    winding_sign = -1 if polygon_area(coords) < 0 else 1  # CW = -1, CCW = +1
+    for i in range(point_count):
+        base_x, base_y = points[i]
+        neighbors = [(base_x, base_y)]  # Always include self
 
-    def triangle_area_sign(a, b, c):
-        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        # Step outward in both directions
+        offset = 1
+        while offset < point_count and len(neighbors) < 3:
+            # Look backward with wraparound
+            if i - offset >= 0:
+                px, py = get_point(i - offset)
+                if math.hypot(px - base_x, py - base_y) <= pixel_radius:
+                    neighbors.append((px, py))
 
-    for i in range(length):
-        x, y = coords[i]
-        # Get neighbors within radius
-        neighbors = [
-            pt for pt in coords if math.hypot(pt[0] - x, pt[1] - y) <= pixel_radius
-        ]
-        if not neighbors:
-            smoothed.append((x, y))
+            # Look forward with wraparound
+            if i + offset < point_count:
+                px, py = get_point(i + offset)
+                if math.hypot(px - base_x, py - base_y) <= pixel_radius:
+                    neighbors.append((px, py))
+
+            offset += 1
+
+        if len(neighbors) == 1:
+            # Only the current point was found, skip smoothing
+            smoothed_points.append((base_x, base_y))
             continue
 
-        # Local average position
+        if len(neighbors) == 2:
+            # Try to get a 3rd point by checking next closest sequential candidate
+            candidates = [get_point(i - offset + 1), get_point(i + offset - 1)]
+
+            # Only consider points not already in neighbors
+            unique_candidates = [pt for pt in candidates if pt not in neighbors]
+
+            # Choose the closer of the candidates (if any)
+            unique_candidates.sort(
+                key=lambda pt: math.hypot(pt[0] - base_x, pt[1] - base_y)
+            )
+            neighbors.append(unique_candidates[0])
+
+        if len(neighbors) < 3:
+            # Still not enough points for meaningful smoothing
+            smoothed_points.append((base_x, base_y))
+            continue
+
+        # Compute average
         avg_x = sum(pt[0] for pt in neighbors) / len(neighbors)
         avg_y = sum(pt[1] for pt in neighbors) / len(neighbors)
 
-        # Determine if current point is an outward bump
-        prev = coords[i - 1]
-        next_pt = coords[(i + 1) % length]
-        signed_area = triangle_area_sign(prev, (x, y), next_pt)
+        new_x = base_x + (avg_x - base_x) * smoothing_factor
+        new_y = base_y + (avg_y - base_y) * smoothing_factor
 
-        is_outward = math.copysign(1, signed_area) == winding_sign
-
-        if is_outward:
-            # Move toward average
-            new_x = x + (avg_x - x) * factor
-            new_y = y + (avg_y - y) * factor
-            smoothed.append((new_x, new_y))
+        # Check if the new point is still inside the selection
+        if is_point_inside_selection(new_x, new_y, selection_channel):
+            smoothed_points.append((new_x, new_y))
         else:
-            # Leave inward/neutral points alone
-            smoothed.append((x, y))
+            smoothed_points.append((base_x, base_y))
 
-    return smoothed
+    return smoothed_points
 
 
-def inside_track_smoothing(coords, factor):
+def compute_inside_track_smoothing(points, smoothing_factor, selection_channel):
     """
     Smooths a path by preferentially cutting inward corners.
-    This creates a smoother path that tends to stay inside the original selection,
-    effectively trimming jagged edges.
-
-    Args:
-        coords: List of (x, y) coordinate tuples
-        factor: Smoothing factor (0.1 to 1.0)
-
-    Returns:
-        List of smoothed (x, y) coordinate tuples
+    This creates a smoother path that tends to stay inside the original selection.
     """
-    # Calculate a bias factor (higher values = stronger inside bias)
-    bias_strength = factor * 0.6  # Scale factor to a useful bias value
-    smoothed = []
-    length = len(coords)
+    bias_strength = smoothing_factor * 0.6
+    smoothed_points = []
+    point_count = len(points)
 
-    for i in range(length):
-        prev_idx = (i - 1) % length
-        next_idx = (i + 1) % length
+    for i in range(point_count):
+        prev_index = (i - 1) % point_count
+        next_index = (i + 1) % point_count
 
-        # Current point and its neighbors
-        prev = coords[prev_idx]
-        curr = coords[i]
-        next_pt = coords[next_idx]
+        prev_point = points[prev_index]
+        curr_point = points[i]
+        next_point = points[next_index]
 
-        # Vectors from current point to neighbors
-        vec_to_prev = (prev[0] - curr[0], prev[1] - curr[1])
-        vec_to_next = (next_pt[0] - curr[0], next_pt[1] - curr[1])
+        vec_to_prev = (prev_point[0] - curr_point[0], prev_point[1] - curr_point[1])
+        vec_to_next = (next_point[0] - curr_point[0], next_point[1] - curr_point[1])
 
-        # Approximate the "inward" direction by using the cross product
-        # This helps determine if we're at an outside corner or inside corner
         cross_z = vec_to_prev[0] * vec_to_next[1] - vec_to_prev[1] * vec_to_next[0]
-
-        # For a clockwise path, negative cross product = outside corner (convex)
-        # For a counterclockwise path, positive cross product = outside corner
-        # We'll assume clockwise for now, but could detect path direction if needed
         is_outside_corner = cross_z < 0
 
-        # Calculate a simple average position (midpoint)
-        avg_x = (prev[0] + curr[0] + next_pt[0]) / 3
-        avg_y = (prev[1] + curr[1] + next_pt[1]) / 3
+        avg_x = (prev_point[0] + curr_point[0] + next_point[0]) / 3
+        avg_y = (prev_point[1] + curr_point[1] + next_point[1]) / 3
 
-        # If it's an outside corner, stay closer to the original point
-        # If it's an inside corner, move more aggressively toward the average
         if is_outside_corner:
-            # For outside corners, stay closer to original
-            smooth_factor = max(
-                0.05, factor * 0.3
-            )  # Limited smoothing for outside corners
-            new_x = curr[0] * (1 - smooth_factor) + avg_x * smooth_factor
-            new_y = curr[1] * (1 - smooth_factor) + avg_y * smooth_factor
+            smooth_factor = max(0.05, smoothing_factor * 0.3)
+            new_x = curr_point[0] * (1 - smooth_factor) + avg_x * smooth_factor
+            new_y = curr_point[1] * (1 - smooth_factor) + avg_y * smooth_factor
         else:
-            # For inside corners, smooth more aggressively
-            smooth_factor = min(0.9, factor * 0.9 + bias_strength)  # Enhanced smoothing
-            new_x = curr[0] * (1 - smooth_factor) + avg_x * smooth_factor
-            new_y = curr[1] * (1 - smooth_factor) + avg_y * smooth_factor
+            smooth_factor = min(0.9, smoothing_factor * 0.9 + bias_strength)
+            new_x = curr_point[0] * (1 - smooth_factor) + avg_x * smooth_factor
+            new_y = curr_point[1] * (1 - smooth_factor) + avg_y * smooth_factor
 
-        smoothed.append((new_x, new_y))
+        smoothed_points.append((new_x, new_y))
 
-    return smoothed
+    return smoothed_points
 
 
-# Alternative implementation using more geometric approach
-def geometric_inner_contour(coords, factor):
+def compute_geometric_inner_contour(points, smoothing_factor, selection_channel):
     """
-    A geometric approach to inner contour smoothing using convex hull
-    and path deflation techniques.
-
-    Args:
-        coords: List of (x, y) coordinate tuples
-        factor: Smoothing factor (0.1 to 1.0)
-
-    Returns:
-        List of smoothed (x, y) coordinate tuples
+    A geometric approach to inner contour smoothing using convex hull techniques.
     """
+    point_count = len(points)
+    interim_points = []
 
-    length = len(coords)
-    result = []
+    for i in range(point_count):
+        prev_index = (i - 1) % point_count
+        next_index = (i + 1) % point_count
 
-    # Step 1: Calculate local convexity at each point
-    for i in range(length):
-        prev_idx = (i - 1) % length
-        next_idx = (i + 1) % length
-
-        # Get the three consecutive points
-        p0 = coords[prev_idx]
-        p1 = coords[i]
-        p2 = coords[next_idx]
+        prev_point = points[prev_index]
+        curr_point = points[i]
+        next_point = points[next_index]
 
         # Vectors between points
-        v1 = (p1[0] - p0[0], p1[1] - p0[1])
-        v2 = (p2[0] - p1[0], p2[1] - p1[1])
+        v1 = (curr_point[0] - prev_point[0], curr_point[1] - prev_point[1])
+        v2 = (next_point[0] - curr_point[0], next_point[1] - curr_point[1])
 
-        # Cross product to determine if it's a convex or concave corner
+        # Cross product to determine corner type
         cross = v1[0] * v2[1] - v1[1] * v2[0]
-
-        # For clockwise paths, cross < 0 means convex (outside) corner
         is_convex = cross < 0
 
         if is_convex:
-            # For convex corners, move the point inward
-            # Calculate the bisector direction
             v1_len = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
             v2_len = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
 
             if v1_len > 0 and v2_len > 0:
-                # Normalize vectors
                 v1_norm = (v1[0] / v1_len, v1[1] / v1_len)
                 v2_norm = (v2[0] / v2_len, v2[1] / v2_len)
 
-                # Compute bisector (pointing inward)
                 bisector = (-(v1_norm[0] + v2_norm[0]), -(v1_norm[1] + v2_norm[1]))
                 bisector_len = math.sqrt(bisector[0] ** 2 + bisector[1] ** 2)
 
                 if bisector_len > 0:
-                    # Normalize bisector
                     bisector = (bisector[0] / bisector_len, bisector[1] / bisector_len)
 
-                    # Move point inward along bisector
-                    # Scale movement by angle sharpness and factor
                     dot_product = v1_norm[0] * v2_norm[0] + v1_norm[1] * v2_norm[1]
-                    angle_factor = max(0, 1 - dot_product)  # Sharper angles move more
+                    angle_factor = max(0, 1 - dot_product)
 
-                    move_distance = factor * 10 * angle_factor
-                    new_x = p1[0] + bisector[0] * move_distance
-                    new_y = p1[1] + bisector[1] * move_distance
+                    move_distance = smoothing_factor * 10 * angle_factor
+                    new_x = curr_point[0] + bisector[0] * move_distance
+                    new_y = curr_point[1] + bisector[1] * move_distance
 
-                    result.append((new_x, new_y))
+                    interim_points.append((new_x, new_y))
                 else:
-                    result.append(p1)  # Keep original if calculation fails
+                    interim_points.append(curr_point)
             else:
-                result.append(p1)  # Keep original if vectors are zero length
+                interim_points.append(curr_point)
         else:
-            # For concave (inside) corners, keep the original point
-            result.append(p1)
+            interim_points.append(curr_point)
 
-    # Step 2: Apply a gentle smoothing pass
-    smoothed = []
-    window_size = max(1, int(factor * 2))
+    # Add a gentle smoothing pass
+    smoothed_points = []
+    window_size = max(1, int(smoothing_factor * 2))
 
-    for i in range(length):
-        indices = [(i + j) % length for j in range(-window_size, window_size + 1)]
-        avg_x = sum(result[j][0] for j in indices) / len(indices)
-        avg_y = sum(result[j][1] for j in indices) / len(indices)
-        smoothed.append((avg_x, avg_y))
+    for i in range(point_count):
+        indices = [(i + j) % point_count for j in range(-window_size, window_size + 1)]
+        avg_x = sum(interim_points[j][0] for j in indices) / len(indices)
+        avg_y = sum(interim_points[j][1] for j in indices) / len(indices)
+        smoothed_points.append((avg_x, avg_y))
 
-    return smoothed
+    return smoothed_points
 
 
-def sanding_smoothing(coords, factor):
+def compute_sanding_smoothing(points, smoothing_factor, selection_channel):
     """
     Smooths only outward-pointing bumps by pulling them toward the line between neighbors.
-    `factor` is between 0.1 and 1.0 and controls the fraction of the "bump" to shave off.
     """
-    length = len(coords)
-    if length < 3:
-        return coords  # Not enough points to smooth
+    point_count = len(points)
+    if point_count < 3:
+        return points
 
-    new_coords = [None] * length
+    new_points = [None] * point_count
 
-    def polygon_area(coords):
-        return 0.5 * sum(
-            coords[i][0] * coords[(i + 1) % length][1]
-            - coords[(i + 1) % length][0] * coords[i][1]
-            for i in range(length)
-        )
-
-    def triangle_area_sign(a, b, c):
-        """Signed area: positive if a->b->c is CCW, negative if CW"""
-        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-    def perpendicular_vector_to_line(p, a, c):
-        """Returns vector from p to its projection on line AC"""
-        acx = c[0] - a[0]
-        acy = c[1] - a[1]
+    def compute_perpendicular_vector_to_line(point, point_a, point_c):
+        acx = point_c[0] - point_a[0]
+        acy = point_c[1] - point_a[1]
         ac_len_sq = acx**2 + acy**2
         if ac_len_sq == 0:
-            return 0.0, 0.0  # Degenerate segment
+            return 0.0, 0.0
 
-        apx = p[0] - a[0]
-        apy = p[1] - a[1]
+        apx = point[0] - point_a[0]
+        apy = point[1] - point_a[1]
         t = (apx * acx + apy * acy) / ac_len_sq
-        px = a[0] + t * acx
-        py = a[1] + t * acy
-        return (px - p[0], py - p[1])
+        px = point_a[0] + t * acx
+        py = point_a[1] + t * acy
+        return (px - point[0], py - point[1])
 
-    # --- Determine overall winding direction ---
-    total_area = polygon_area(coords)
-    winding_sign = -1 if total_area < 0 else 1  # CW = -1, CCW = +1
+    for i in range(point_count):
+        point_a = points[i - 1]
+        point_b = points[i]
+        point_c = points[(i + 1) % point_count]
 
-    # --- Sand each point ---
-    for i in range(length):
-        a = coords[i - 1]
-        b = coords[i]
-        c = coords[(i + 1) % length]
-
-        signed_area = triangle_area_sign(a, b, c)
-        if math.copysign(1, signed_area) != winding_sign:
-            # This is an inward dent or flat segment - skip
-            new_coords[i] = b
+        if is_corner(point_a, point_b, point_c):
+            new_points[i] = point_b
             continue
 
-        # This is an outward bump - shave it
-        dx, dy = perpendicular_vector_to_line(b, a, c)
-        new_coords[i] = (b[0] + dx * factor, b[1] + dy * factor)
+        dx, dy = compute_perpendicular_vector_to_line(point_b, point_a, point_c)
+        proposed_point = (
+            point_b[0] + dx * smoothing_factor,
+            point_b[1] + dy * smoothing_factor,
+        )
 
-    return new_coords
+        pixel_value = pdb.gimp_drawable_get_pixel(
+            selection_channel, int(proposed_point[0]), int(proposed_point[1])
+        )[1][0]
+        is_inside = pixel_value > 128
+        if is_inside:
+            new_points[i] = proposed_point
+        else:
+            new_points[i] = point_b
 
-
-SMOOTH_METHODS = [
-    (
-        "Moving Average",
-        moving_average,
-        "Balances each point with its neighbors. Fast, general-purpose smoothing.",
-    ),
-    (
-        "Chaikin",
-        chaikin_smoothing,
-        "Creates soft, rounded curves by subdividing lines. Doubles point count.",
-    ),
-    (
-        "Gaussian",
-        gaussian_smoothing,
-        "Smooths with precision using a weighted average. Preserves shape better.",
-    ),
-    (
-        "Pixel Radius",
-        pixel_radius_smoothing,
-        "Averages points within a pixel range. Great for high-detail smoothing.",
-    ),
-    (
-        "Inward Pixel Radius",
-        inward_pixel_radius_smoothing,
-        "Like Pixel Radius but only pulls in bumps, preserving inward details.",
-    ),
-    (
-        "Inside Track",
-        inside_track_smoothing,
-        "Favors smoothing inward. Keeps selection close to original edges.",
-    ),
-    (
-        "Geometric Inner Contour",
-        geometric_inner_contour,
-        "Trims sharp convex corners while keeping concave points.",
-    ),
-    (
-        "Sanding",
-        sanding_smoothing,
-        "Smooths only protruding bumps, preserving detail elsewhere.",
-    ),
-]
-
-
-METHOD_LABELS = [name for name, _, _ in SMOOTH_METHODS] + [
-    "Help - Show method descriptions"
-]
+    return new_points
 
 
 def show_help_dialog():
@@ -416,6 +332,192 @@ def show_help_dialog():
     pdb.gimp_message(help_text)
 
 
+def is_corner(point_a, point_b, point_c, angle_threshold=135, deviation_threshold=3.0):
+    # Vectors AB and BC
+    ab_vector = (point_b[0] - point_a[0], point_b[1] - point_a[1])
+    bc_vector = (point_c[0] - point_b[0], point_c[1] - point_b[1])
+
+    def normalize_vector(vector):
+        mag = math.hypot(*vector)
+        return (vector[0] / mag, vector[1] / mag) if mag != 0 else (0, 0)
+
+    ab_normalized = normalize_vector(ab_vector)
+    bc_normalized = normalize_vector(bc_vector)
+
+    dot_product = (
+        ab_normalized[0] * bc_normalized[0] + ab_normalized[1] * bc_normalized[1]
+    )
+    dot_product = max(-1.0, min(1.0, dot_product))
+
+    angle = math.acos(dot_product)
+    angle_degrees = math.degrees(angle)
+
+    is_sharp_angle = angle_degrees < angle_threshold
+
+    def compute_point_line_distance(point, point_a, point_c):
+        acx, acy = point_c[0] - point_a[0], point_c[1] - point_a[1]
+        ac_len_sq = acx**2 + acy**2
+        if ac_len_sq == 0:
+            return math.hypot(point[0] - point_a[0], point[1] - point_a[1])
+
+        apx, apy = point[0] - point_a[0], point[1] - point_a[1]
+        t = (apx * acx + apy * acy) / ac_len_sq
+        proj_x = point_a[0] + t * acx
+        proj_y = point_a[1] + t * acy
+        return math.hypot(proj_x - point[0], proj_y - point[1])
+
+    deviation = compute_point_line_distance(point_b, point_a, point_c)
+    is_high_deviation = deviation > deviation_threshold
+
+    return is_sharp_angle and is_high_deviation
+
+
+def is_point_inside_selection(x, y, selection_channel):
+    width = pdb.gimp_drawable_width(selection_channel)
+    height = pdb.gimp_drawable_height(selection_channel)
+
+    for dx in [-1, 0, 1]:
+        for dy in [-1, 0, 1]:
+            sample_x = int(x + dx)
+            sample_y = int(y + dy)
+
+            if 0 <= sample_x < width and 0 <= sample_y < height:
+                pixel_value = pdb.gimp_drawable_get_pixel(
+                    selection_channel, sample_x, sample_y
+                )[1][0]
+                if pixel_value > 128:
+                    return True
+    return False
+
+
+SMOOTH_METHODS = [
+    (
+        "Moving Average",
+        compute_moving_average,
+        "Balances each point with its neighbors. Fast, general-purpose smoothing.",
+    ),
+    (
+        "Chaikin",
+        compute_chaikin_smoothing,
+        "Creates soft, rounded curves by subdividing lines. Doubles point count.",
+    ),
+    (
+        "Gaussian",
+        compute_gaussian_smoothing,
+        "Smooths with precision using a weighted average. Preserves shape better.",
+    ),
+    (
+        "Pixel Radius",
+        compute_pixel_radius_smoothing,
+        "Averages points within a pixel range. Great for high-detail smoothing.",
+    ),
+    (
+        "Inward Pixel Radius",
+        compute_inward_pixel_radius_smoothing,
+        "Like Pixel Radius but only pulls in bumps, preserving inward details.",
+    ),
+    (
+        "Inside Track",
+        compute_inside_track_smoothing,
+        "Favors smoothing inward. Keeps selection close to original edges.",
+    ),
+    (
+        "Geometric Inner Contour",
+        compute_geometric_inner_contour,
+        "Trims sharp convex corners while keeping concave points.",
+    ),
+    (
+        "Sanding",
+        compute_sanding_smoothing,
+        "Smooths only protruding bumps, preserves detail elsewhere.",
+    ),
+]
+
+
+METHOD_LABELS = [name for name, _, _ in SMOOTH_METHODS] + [
+    "Help - Show method descriptions"
+]
+
+
+def bezier_cubic_points_filtered(point_a, point_b, factor):
+    factor *= 10
+
+    p0 = (point_a[BEZIER_ANCHOR_X], point_a[BEZIER_ANCHOR_Y])
+    p1 = (point_a[BEZIER_OUT_CTRL_X], point_a[BEZIER_OUT_CTRL_Y])
+    p2 = (point_b[BEZIER_IN_CTRL_X], point_b[BEZIER_IN_CTRL_Y])
+    p3 = (point_b[BEZIER_ANCHOR_X], point_b[BEZIER_ANCHOR_Y])
+
+    def is_flat_enough(p0, p1, p2, p3, threshold):
+        # Measure deviation of control points from the baseline (p0-p3)
+        def point_line_distance(pt, a, b):
+            if a == b:
+                return math.hypot(pt[0] - a[0], pt[1] - a[1])
+            num = abs(
+                (b[1] - a[1]) * pt[0]
+                - (b[0] - a[0]) * pt[1]
+                + b[0] * a[1]
+                - b[1] * a[0]
+            )
+            den = math.hypot(b[0] - a[0], b[1] - a[1])
+            return num / den
+
+        return (
+            point_line_distance(p1, p0, p3) < threshold
+            and point_line_distance(p2, p0, p3) < threshold
+        )
+
+    def subdivide(p0, p1, p2, p3):
+        # de Casteljau subdivision
+        p01 = midpoint(p0, p1)
+        p12 = midpoint(p1, p2)
+        p23 = midpoint(p2, p3)
+        p012 = midpoint(p01, p12)
+        p123 = midpoint(p12, p23)
+        p0123 = midpoint(p012, p123)
+        return ((p0, p01, p012, p0123), (p0123, p123, p23, p3))
+
+    def midpoint(a, b):
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+    def flatten(p0, p1, p2, p3, threshold):
+        if is_flat_enough(p0, p1, p2, p3, threshold):
+            return [p0, p3]
+        else:
+            left, right = subdivide(p0, p1, p2, p3)
+            return flatten(left[0], left[1], left[2], left[3], threshold)[
+                :-1
+            ] + flatten(right[0], right[1], right[2], right[3], threshold)
+
+    # Generate raw points
+    raw_points = flatten(p0, p1, p2, p3, factor)
+    rounded = [tuple(map(int, map(round, pt))) for pt in raw_points]
+
+    # Remove adjacent pixels and collinear middles
+    def is_adjacent(a, b):
+        return max(abs(a[0] - b[0]), abs(a[1] - b[1])) <= 1
+
+    def is_collinear(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) == (b[1] - a[1]) * (c[0] - a[0])
+
+    filtered = []
+    for pt in rounded:
+        if not filtered:
+            filtered.append(pt)
+
+    for pt in rounded:
+        if not filtered or not is_adjacent(filtered[-1], pt):
+            filtered.append(pt)
+
+    i = 1
+    while i < len(filtered) - 1:
+        if is_collinear(filtered[i - 1], filtered[i], filtered[i + 1]):
+            del filtered[i]
+        else:
+            i += 1
+
+    return filtered
+
+
 def smooth_selection(
     image,
     drawable,
@@ -425,7 +527,6 @@ def smooth_selection(
     preserve_curves,
     preserve_path,
 ):
-
     # Show help dialog and exit early if Help is selected
     if method_index == len(SMOOTH_METHODS):
         show_help_dialog()
@@ -435,7 +536,9 @@ def smooth_selection(
         pdb.gimp_message("No selection found. Please select an area first.")
         return
 
+    previously_active_layer = pdb.gimp_image_get_active_layer(image)
     pdb.gimp_image_undo_group_start(image)
+    selection_channel = pdb.gimp_selection_save(image)
 
     pdb.plug_in_sel2path(image, drawable)
     vectors = pdb.gimp_image_get_active_vectors(image)
@@ -452,48 +555,76 @@ def smooth_selection(
             vectors, str(stroke_id)
         )
 
-        # We'll parse the full 6-float structure for each anchor:
-        bezier_anchors = [list(points[i : i + 6]) for i in range(0, len(points), 6)]
+        for _ in range(int(smooth_iterations)):
+            selection_channel = pdb.gimp_selection_save(image)
 
-        if len(bezier_anchors) < 6:
-            # skip very simple paths, likely image boundaries
-            continue
+            # Parse the full 6-float structure for each anchor
+            bezier_anchors = [list(points[i : i + 6]) for i in range(0, len(points), 6)]
 
-        if preserve_curves:
-            # Only pass anchor coords (ax, ay) to the smoothing function
-            anchor_coords = [(a[ANCHOR_X], a[ANCHOR_Y]) for a in bezier_anchors]
+            if len(bezier_anchors) < 6:
+                # Skip very simple paths, likely image boundaries
+                continue
 
-            for _ in range(int(smooth_iterations)):
-                anchor_coords = smoothing_function(anchor_coords, factor)
+            if preserve_curves:
+                # Only pass anchor coords (ax, ay) to the smoothing function
+                anchor_coords = [
+                    (a[BEZIER_ANCHOR_X], a[BEZIER_ANCHOR_Y]) for a in bezier_anchors
+                ]
 
-            # Update anchor positions with smoothed coords
-            for j, (sx, sy) in enumerate(anchor_coords):
-                bezier_anchors[j][ANCHOR_X] = sx
-                bezier_anchors[j][ANCHOR_Y] = sy
+                anchor_coords = smoothing_function(
+                    anchor_coords, factor, selection_channel
+                )
 
-            new_points = [
-                coord for bezier_anchor in bezier_anchors for coord in bezier_anchor
-            ]
+                # Update anchor positions with smoothed coords
+                for j, (sx, sy) in enumerate(anchor_coords):
+                    bezier_anchors[j][BEZIER_ANCHOR_X] = sx
+                    bezier_anchors[j][BEZIER_ANCHOR_Y] = sy
 
-            final_stroke_type = stroke_type  # keep original stroke type
-        else:
-            # Fallback to old approach: treat each anchor as (x, y) repeated
-            anchor_coords = [(a[ANCHOR_X], a[ANCHOR_Y]) for a in bezier_anchors]
+                new_points = [
+                    coord for bezier_anchor in bezier_anchors for coord in bezier_anchor
+                ]
 
-            for _ in range(int(smooth_iterations)):
-                anchor_coords = smoothing_function(anchor_coords, factor)
+                final_stroke_type = stroke_type  # keep original stroke type
+            else:
+                anchor_coords = []
 
-            new_points = []
-            for x, y in anchor_coords:
-                # Collapse out & in handles to the anchor itself
-                new_points += [x, y, x, y, x, y]
+                for i in range(len(bezier_anchors) - 1):
+                    first = bezier_anchors[i]
+                    second = bezier_anchors[i + 1]
+                    segment_points = bezier_cubic_points_filtered(first, second, factor)
+                    anchor_coords.extend(segment_points)
 
-            # Force stroke type = 0 (POLY line) if not preserving curves
-            final_stroke_type = 0
+                if len(bezier_anchors) > 1:
+                    first = bezier_anchors[-1]
+                    second = bezier_anchors[0]
+                    anchor_coords.extend(
+                        bezier_cubic_points_filtered(first, second, factor)
+                    )
+
+                deduped_anchor_coords = []
+                for pt in anchor_coords:
+                    if not deduped_anchor_coords or pt != deduped_anchor_coords[-1]:
+                        deduped_anchor_coords.append(pt)
+
+                anchor_coords = deduped_anchor_coords
+
+                anchor_coords = smoothing_function(
+                    deduped_anchor_coords, factor, selection_channel
+                )
+
+                new_points = []
+                for x, y in anchor_coords:
+                    # Collapse out & in handles to the anchor itself
+                    new_points += [x, y, x, y, x, y]
+
+                # Force stroke type = 0 (POLY line) if not preserving curves
+                final_stroke_type = 0
+
+            points = new_points
 
         # Create the smoothed stroke
         pdb.gimp_vectors_stroke_new_from_points(
-            new_vectors, final_stroke_type, len(new_points), new_points, closed
+            new_vectors, final_stroke_type, len(points), points, closed
         )
 
     # Re-select from the new vectors
@@ -503,6 +634,8 @@ def smooth_selection(
         pdb.gimp_image_remove_vectors(image, new_vectors)
 
     pdb.gimp_image_remove_vectors(image, vectors)
+    pdb.gimp_image_remove_channel(image, selection_channel)
+    pdb.gimp_image_set_active_layer(image, previously_active_layer)
     pdb.gimp_displays_flush()
     pdb.gimp_image_undo_group_end(image)
 
@@ -519,10 +652,10 @@ register(
     [
         (PF_IMAGE, "image", "Input Image", None),
         (PF_DRAWABLE, "drawable", "Input Drawable", None),
-        (PF_SLIDER, "smooth_iterations", "Smoothing Iterations", 3, (1, 10, 1)),
+        (PF_SLIDER, "smooth_iterations", "Smoothing Iterations", 1, (1, 10, 1)),
         (PF_OPTION, "method_index", "Smoothing Method", 0, METHOD_LABELS),
         (PF_SLIDER, "smoothing_strength", "Smoothing Strength", 5, (1, 10, 1)),
-        (PF_TOGGLE, "preserve_curves", "Preserve Curves", True),
+        (PF_TOGGLE, "preserve_curves", "Preserve Curves", False),
         (PF_TOGGLE, "preserve_path", "Preserve Path", False),
     ],
     [],
