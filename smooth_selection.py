@@ -1,7 +1,12 @@
 #!/usr/bin/env python
 
-from gimpfu import *
+import imp
+import inspect
 import math
+import os
+import sys
+
+from gimpfu import *
 
 # Coordinate indices for Bezier point arrays
 BEZIER_IN_CTRL_X = 0
@@ -640,27 +645,39 @@ def smooth_selection(
     pdb.gimp_image_undo_group_end(image)
 
 
-register(
-    "python_fu_smooth_selection",
-    "Smooth Selection",
-    "Smooths the active selection without introducing transparency.",
-    "Chris Barth",
-    "Chris Barth",
-    "2025",
-    "Smooth Selection...",
-    "RGB*, GRAY*",
-    [
-        (PF_IMAGE, "image", "Input Image", None),
-        (PF_DRAWABLE, "drawable", "Input Drawable", None),
-        (PF_SLIDER, "smooth_iterations", "Smoothing Iterations", 1, (1, 10, 1)),
-        (PF_OPTION, "method_index", "Smoothing Method", 0, METHOD_LABELS),
-        (PF_SLIDER, "smoothing_strength", "Smoothing Strength", 5, (1, 10, 1)),
-        (PF_TOGGLE, "preserve_curves", "Preserve Curves", False),
-        (PF_TOGGLE, "preserve_path", "Preserve Path", False),
-    ],
-    [],
-    smooth_selection,
-    menu="<Image>/Select",
-)
+def _reload():
+    py_path = inspect.getsourcefile(sys.modules[__name__])
+    pyc_path = py_path + "c"
 
-main()
+    if os.path.exists(pyc_path):
+        os.remove(pyc_path)
+
+    imp.load_source("smooth_selection", py_path)
+    pdb.gimp_message("smooth_selection.py reloaded from source.")
+
+
+if __name__ == "__main__":
+    register(
+        "python_fu_smooth_selection",
+        "Smooth Selection",
+        "Smooths the active selection without introducing transparency.",
+        "Chris Barth",
+        "Chris Barth",
+        "2025",
+        "Smooth Selection...",
+        "RGB*, GRAY*",
+        [
+            (PF_IMAGE, "image", "Input Image", None),
+            (PF_DRAWABLE, "drawable", "Input Drawable", None),
+            (PF_SLIDER, "smooth_iterations", "Smoothing Iterations", 3, (1, 10, 1)),
+            (PF_OPTION, "method_index", "Smoothing Method", 0, METHOD_LABELS),
+            (PF_SLIDER, "smoothing_strength", "Smoothing Strength", 5, (1, 10, 1)),
+            (PF_TOGGLE, "preserve_curves", "Preserve Curves", False),
+            (PF_TOGGLE, "preserve_path", "Preserve Path", False),
+        ],
+        [],
+        smooth_selection,
+        menu="<Image>/Select",
+    )
+
+    main()
