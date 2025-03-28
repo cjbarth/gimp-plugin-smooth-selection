@@ -445,7 +445,7 @@ METHOD_LABELS = [name for name, _, _ in SMOOTH_METHODS] + [
 
 
 def bezier_cubic_points_filtered(point_a, point_b, factor):
-    factor *= 10
+    factor *= 5
 
     p0 = (point_a[BEZIER_ANCHOR_X], point_a[BEZIER_ANCHOR_Y])
     p1 = (point_a[BEZIER_OUT_CTRL_X], point_a[BEZIER_OUT_CTRL_Y])
