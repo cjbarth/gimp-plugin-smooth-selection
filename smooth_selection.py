@@ -542,107 +542,116 @@ def smooth_selection(
         return
 
     previously_active_layer = pdb.gimp_image_get_active_layer(image)
-    pdb.gimp_image_undo_group_start(image)
-    selection_channel = pdb.gimp_selection_save(image)
+    try:
+        pdb.gimp_image_undo_group_start(image)
+        selection_channel = pdb.gimp_selection_save(image)
 
-    pdb.plug_in_sel2path(image, drawable)
-    vectors = pdb.gimp_image_get_active_vectors(image)
-    stroke_count, stroke_ids = pdb.gimp_vectors_get_strokes(vectors)
+        pdb.plug_in_sel2path(image, drawable)
+        vectors = pdb.gimp_image_get_active_vectors(image)
+        stroke_count, stroke_ids = pdb.gimp_vectors_get_strokes(vectors)
 
-    new_vectors = pdb.gimp_vectors_new(image, "Smoothed Selection")
-    pdb.gimp_image_insert_vectors(image, new_vectors, None, 0)
+        new_vectors = pdb.gimp_vectors_new(image, "Smoothed Selection")
+        pdb.gimp_image_insert_vectors(image, new_vectors, None, 0)
 
-    method_name, smoothing_function, _ = SMOOTH_METHODS[method_index]
-    factor = smoothing_strength / 10.0  # Normalize smoothing_strength to 0.1 - 1.0
+        method_name, smoothing_function, _ = SMOOTH_METHODS[method_index]
+        factor = smoothing_strength / 10.0  # Normalize smoothing_strength to 0.1 - 1.0
 
-    for stroke_id in stroke_ids:
-        stroke_type, num_points, points, closed = pdb.gimp_vectors_stroke_get_points(
-            vectors, str(stroke_id)
-        )
+        for stroke_id in stroke_ids:
+            stroke_type, num_points, points, closed = (
+                pdb.gimp_vectors_stroke_get_points(vectors, str(stroke_id))
+            )
 
-        for _ in range(int(smooth_iterations)):
-            selection_channel = pdb.gimp_selection_save(image)
+            for _ in range(int(smooth_iterations)):
+                selection_channel = pdb.gimp_selection_save(image)
 
-            # Parse the full 6-float structure for each anchor
-            bezier_anchors = [list(points[i : i + 6]) for i in range(0, len(points), 6)]
-
-            if len(bezier_anchors) < 6:
-                # Skip very simple paths, likely image boundaries
-                continue
-
-            if preserve_curves:
-                # Only pass anchor coords (ax, ay) to the smoothing function
-                anchor_coords = [
-                    (a[BEZIER_ANCHOR_X], a[BEZIER_ANCHOR_Y]) for a in bezier_anchors
+                # Parse the full 6-float structure for each anchor
+                bezier_anchors = [
+                    list(points[i : i + 6]) for i in range(0, len(points), 6)
                 ]
 
-                anchor_coords = smoothing_function(
-                    anchor_coords, factor, selection_channel
-                )
+                if len(bezier_anchors) < 6:
+                    # Skip very simple paths, likely image boundaries
+                    continue
 
-                # Update anchor positions with smoothed coords
-                for j, (sx, sy) in enumerate(anchor_coords):
-                    bezier_anchors[j][BEZIER_ANCHOR_X] = sx
-                    bezier_anchors[j][BEZIER_ANCHOR_Y] = sy
+                if preserve_curves:
+                    # Only pass anchor coords (ax, ay) to the smoothing function
+                    anchor_coords = [
+                        (a[BEZIER_ANCHOR_X], a[BEZIER_ANCHOR_Y]) for a in bezier_anchors
+                    ]
 
-                new_points = [
-                    coord for bezier_anchor in bezier_anchors for coord in bezier_anchor
-                ]
-
-                final_stroke_type = stroke_type  # keep original stroke type
-            else:
-                anchor_coords = []
-
-                for i in range(len(bezier_anchors) - 1):
-                    first = bezier_anchors[i]
-                    second = bezier_anchors[i + 1]
-                    segment_points = bezier_cubic_points_filtered(first, second, factor)
-                    anchor_coords.extend(segment_points)
-
-                if len(bezier_anchors) > 1:
-                    first = bezier_anchors[-1]
-                    second = bezier_anchors[0]
-                    anchor_coords.extend(
-                        bezier_cubic_points_filtered(first, second, factor)
+                    anchor_coords = smoothing_function(
+                        anchor_coords, factor, selection_channel
                     )
 
-                deduped_anchor_coords = []
-                for pt in anchor_coords:
-                    if not deduped_anchor_coords or pt != deduped_anchor_coords[-1]:
-                        deduped_anchor_coords.append(pt)
+                    # Update anchor positions with smoothed coords
+                    for j, (sx, sy) in enumerate(anchor_coords):
+                        bezier_anchors[j][BEZIER_ANCHOR_X] = sx
+                        bezier_anchors[j][BEZIER_ANCHOR_Y] = sy
 
-                anchor_coords = deduped_anchor_coords
+                    new_points = [
+                        coord
+                        for bezier_anchor in bezier_anchors
+                        for coord in bezier_anchor
+                    ]
+                else:
+                    anchor_coords = []
 
-                anchor_coords = smoothing_function(
-                    deduped_anchor_coords, factor, selection_channel
-                )
+                    for i in range(len(bezier_anchors) - 1):
+                        first = bezier_anchors[i]
+                        second = bezier_anchors[i + 1]
+                        segment_points = bezier_cubic_points_filtered(
+                            first, second, factor
+                        )
+                        anchor_coords.extend(segment_points)
 
-                new_points = []
-                for x, y in anchor_coords:
-                    # Collapse out & in handles to the anchor itself
-                    new_points += [x, y, x, y, x, y]
+                    if len(bezier_anchors) > 1:
+                        first = bezier_anchors[-1]
+                        second = bezier_anchors[0]
+                        anchor_coords.extend(
+                            bezier_cubic_points_filtered(first, second, factor)
+                        )
 
-                # Force stroke type = 0 (POLY line) if not preserving curves
-                final_stroke_type = 0
+                    deduped_anchor_coords = []
+                    for pt in anchor_coords:
+                        if not deduped_anchor_coords or pt != deduped_anchor_coords[-1]:
+                            deduped_anchor_coords.append(pt)
 
-            points = new_points
+                    anchor_coords = deduped_anchor_coords
 
-        # Create the smoothed stroke
-        pdb.gimp_vectors_stroke_new_from_points(
-            new_vectors, final_stroke_type, len(points), points, closed
-        )
+                    anchor_coords = smoothing_function(
+                        deduped_anchor_coords, factor, selection_channel
+                    )
 
-    # Re-select from the new vectors
-    pdb.gimp_image_select_item(image, CHANNEL_OP_REPLACE, new_vectors)
+                    new_points = []
+                    for x, y in anchor_coords:
+                        # Collapse out & in handles to the anchor itself
+                        new_points += [x, y, x, y, x, y]
 
-    if not preserve_path:
-        pdb.gimp_image_remove_vectors(image, new_vectors)
+                    # Force stroke type = 0 (POLY line) if not preserving curves
+                    stroke_type = 0
 
-    pdb.gimp_image_remove_vectors(image, vectors)
-    pdb.gimp_image_remove_channel(image, selection_channel)
-    pdb.gimp_image_set_active_layer(image, previously_active_layer)
-    pdb.gimp_displays_flush()
-    pdb.gimp_image_undo_group_end(image)
+                points = new_points
+
+            # Create the smoothed stroke
+            pdb.gimp_vectors_stroke_new_from_points(
+                new_vectors, stroke_type, len(points), points, closed
+            )
+
+        # Re-select from the new vectors
+        pdb.gimp_image_select_item(image, CHANNEL_OP_REPLACE, new_vectors)
+
+        if not preserve_path:
+            pdb.gimp_image_remove_vectors(image, new_vectors)
+
+        pdb.gimp_image_remove_vectors(image, vectors)
+        pdb.gimp_image_remove_channel(image, selection_channel)
+        pdb.gimp_image_set_active_layer(image, previously_active_layer)
+        pdb.gimp_displays_flush()
+    finally:
+        pdb.gimp_image_undo_group_end(image)
+
+
+
 
 
 def _reload():
@@ -654,7 +663,6 @@ def _reload():
 
     imp.load_source("smooth_selection", py_path)
     pdb.gimp_message("smooth_selection.py reloaded from source.")
-
 
 if __name__ == "__main__":
     register(
