@@ -651,10 +651,25 @@ def smooth_selection(
         pdb.gimp_image_undo_group_end(image)
 
 
-
-
-
 def _reload():
+    """
+    # Copy me to the Python-Fu Console to reload the script from source.
+    # This is useful for debugging and testing changes without restarting GIMP.
+    import sys, os
+
+    paths_to_try = [
+        os.path.join(os.path.expanduser("~"), "AppData", "Roaming", "GIMP", "2.10", "plug-ins"),
+        os.path.join(os.path.expanduser("~"), "AppData", "Local", "GIMP", "2.10", "plug-ins")
+    ]
+
+    for path in paths_to_try:
+        if os.path.isdir(path) and path not in sys.path:
+            sys.path.append(path)
+
+    import smooth_selection
+    smooth_selection._reload()
+    """
+
     py_path = inspect.getsourcefile(sys.modules[__name__])
     pyc_path = py_path + "c"
 
